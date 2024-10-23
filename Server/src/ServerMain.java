@@ -30,6 +30,11 @@ public class ServerMain {
             kmf.init(ks, passphrase);
             sslContext.init(kmf.getKeyManagers(), null, new SecureRandom());
 
+            // Create SSLServerSocketFactory and SSLServerSocket
+            SSLServerSocketFactory ssf = sslContext.getServerSocketFactory();
+            serverSocket = (SSLServerSocket) ssf.createServerSocket(Config.SERVER_PORT);
+            logger.info("Server started and listening on port " + Config.SERVER_PORT);
+
             // Continuously accept client connections
             while (true) {
                 SSLSocket clientSocket = (SSLSocket) serverSocket.accept();
