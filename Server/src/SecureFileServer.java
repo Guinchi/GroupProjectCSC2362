@@ -2,6 +2,11 @@
 import java.io.*;
 import java.nio.file.*;
 import java.security.KeyStore;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.net.ssl.*;
@@ -11,6 +16,10 @@ public class SecureFileServer {
     private static final String KEYSTORE_PATH = "server.keystore";
     private static final String KEYSTORE_PASSWORD = "Diego241202"; 
     private static final String FILE_STORAGE_PATH = "C:\\Users\\guinc\\Desktop\\stuff\\ServerStorage"; // Directory for storing files
+
+    private static final String DB_URL = "database URL"; // Database URL
+    private static final String DB_USER = "database user"; // Database user
+    private static final String DB_PASSWORD = "database password"; // Database password
 
     private static final Logger logger = Logger.getLogger(SecureFileServer.class.getName());
 
@@ -67,7 +76,7 @@ public class SecureFileServer {
             BufferedWriter out = new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream()));
         ) {
             out.write("Welcome to the Server!\n");
-            out.write("Available commands: LIST, UPLOAD <filename>, DOWNLOAD <filename>, EXIT\n");
+            out.write("Available commands: LOGIN <username> <password>, LIST, UPLOAD <filename>, DOWNLOAD <filename>, EXIT\n");
             out.flush();
 
             String clientMessage;
@@ -77,6 +86,17 @@ public class SecureFileServer {
                 String command = tokens[0].toUpperCase();
 
                 switch (command) {
+                    case "LOGIN":
+                        if (tokens.length < 3) {
+                            out.write("Error: Username or password not specified.\n");
+                        } else {
+                            String username = tokens[1];
+                            String password = tokens[2];
+                            boolean isValid = validateUser(username, password);
+                            out.write(isValid ? "Login successful.\n" : "Error: Invalid username or password.\n");
+                        }
+                        out.flush();
+                        break;
                     case "LIST":
                         handleListCommand(out);
                         break;
@@ -119,6 +139,26 @@ public class SecureFileServer {
             }
         }
     }
+
+
+    private static boolean validateUser(String username, String password) {
+        String query = "SELECT 1 FROM users WHERE username = ? AND password = ?";
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+                 
+                stmt.setString(1, username);
+                stmt.setString(2, password);
+
+                try (ResultSet rs = stmt.executeQuery()) {
+                    return rs.next();
+                }
+            } catch (SQLException e) {
+                logger.log(Level.SEVERE, "Database connection error: ", e);
+            }
+
+        return false;
+    }
+    
 
     private static void handleListCommand(BufferedWriter out) throws IOException {
         File folder = new File(FILE_STORAGE_PATH);
