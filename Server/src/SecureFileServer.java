@@ -73,15 +73,17 @@ public class SecureFileServer {
     private static void handleClient(SSLSocket clientSocket) {
         String currentUser = null; // Track the logged-in user
         try (
-            BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-            BufferedWriter out = new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream()));
+            InputStream inStream = clientSocket.getInputStream();
+            OutputStream outStream = clientSocket.getOutputStream();
+            DataInputStream in = new DataInputStream(inStream);
+            DataOutputStream out = new DataOutputStream(outStream);
         ) {
-            out.write("Welcome to the Secure Server!\n");
-            out.write("Available commands: LOGIN <username> <password>, LIST, UPLOAD <filename>, DOWNLOAD <filename>, DELETE <filename>, EXIT\n");
-            out.flush();
+            out.writeUTF("Welcome to the Secure Server!");
+            out.writeUTF("Available commands: LOGIN <username> <password>, LIST, UPLOAD <filename>, DOWNLOAD <filename>, DELETE <filename>, EXIT");
 
             String clientMessage;
-            while ((clientMessage = in.readLine()) != null) {
+            while (true) {
+                clientMessage = in.readUTF();
                 logger.info("Received command from client: " + clientMessage);
                 String[] tokens = clientMessage.split(" ", 3); // Allow up to 3 tokens
                 String command = tokens[0].toUpperCase();
@@ -89,7 +91,7 @@ public class SecureFileServer {
                 switch (command) {
                     case "LOGIN":
                         if (tokens.length < 3) {
-                            out.write("Error: Username or password not specified.\n");
+                            out.writeUTF("Error: Username or password not specified.");
                         } else {
                             String username = tokens[1];
                             String password = tokens[2];
@@ -97,12 +99,11 @@ public class SecureFileServer {
                             if (isValid) {
                                 currentUser = username;
                                 createUserFolder(currentUser);
-                                out.write("Login successful.\n");
+                                out.writeUTF("Login successful.");
                             } else {
-                                out.write("Error: Invalid username or password.\n");
+                                out.writeUTF("Error: Invalid username or password.");
                             }
                         }
-                        out.flush();
                         break;
                     case "LIST":
                         if (isLoggedIn(currentUser, out)) {
@@ -112,44 +113,41 @@ public class SecureFileServer {
                     case "UPLOAD":
                         if (isLoggedIn(currentUser, out)) {
                             if (tokens.length < 2) {
-                                out.write("Error: Filename not specified.\n");
+                                out.writeUTF("Error: Filename not specified.");
                             } else {
                                 handleUploadCommand(in, out, tokens[1], currentUser);
                             }
-                            out.flush();
                         }
                         break;
                     case "DOWNLOAD":
                         if (isLoggedIn(currentUser, out)) {
                             if (tokens.length < 2) {
-                                out.write("Error: Filename not specified.\n");
+                                out.writeUTF("Error: Filename not specified.");
                             } else {
-                                handleDownloadCommand(out, tokens[1], currentUser);
+                                handleDownloadCommand(in, out, tokens[1], currentUser);
                             }
-                            out.flush();
                         }
                         break;
                     case "DELETE":
                         if (isLoggedIn(currentUser, out)) {
                             if (tokens.length < 2) {
-                                out.write("Error: Filename not specified.\n");
+                                out.writeUTF("Error: Filename not specified.");
                             } else {
                                 handleDeleteCommand(out, tokens[1], currentUser);
                             }
-                            out.flush();
                         }
                         break;
                     case "EXIT":
-                        out.write("Goodbye!\n");
-                        out.flush();
+                        out.writeUTF("Goodbye!");
                         clientSocket.close();
                         return;
                     default:
-                        out.write("Unknown command.\n");
-                        out.flush();
+                        out.writeUTF("Unknown command.");
                         break;
                 }
             }
+        } catch (EOFException e) {
+            logger.info("Client disconnected.");
         } catch (IOException e) {
             logger.log(Level.WARNING, "Client connection error: ", e);
         } finally {
@@ -192,80 +190,84 @@ public class SecureFileServer {
         }
     }
 
-    private static boolean isLoggedIn(String currentUser, BufferedWriter out) throws IOException {
+    private static boolean isLoggedIn(String currentUser, DataOutputStream out) throws IOException {
         if (currentUser == null) {
-            out.write("Error: You must be logged in to perform this action.\n");
-            out.flush();
+            out.writeUTF("Error: You must be logged in to perform this action.");
             return false;
         }
         return true;
     }
 
-    private static void handleListCommand(BufferedWriter out, String currentUser) throws IOException {
+    private static void handleListCommand(DataOutputStream out, String currentUser) throws IOException {
         File userFolder = new File(FILE_STORAGE_PATH, currentUser);
         File[] listOfFiles = userFolder.listFiles();
 
         if (listOfFiles != null && listOfFiles.length > 0) {
-            out.write("Your files:\n");
+            out.writeUTF("Your files:");
             for (File file : listOfFiles) {
                 if (file.isFile()) {
-                    out.write(file.getName() + "\n");
+                    out.writeUTF(file.getName());
                 }
             }
         } else {
-            out.write("No files found in your folder.\n");
+            out.writeUTF("No files found in your folder.");
         }
-        out.flush();
     }
 
-    private static void handleUploadCommand(BufferedReader in, BufferedWriter out, String fileName, String currentUser) throws IOException {
-        out.write("Ready to receive file content. End with a single line 'EOF'.\n");
-        out.flush();
+    private static void handleUploadCommand(DataInputStream in, DataOutputStream out, String fileName, String currentUser) throws IOException {
+        out.writeUTF("Ready to receive file size.");
 
-        StringBuilder fileContent = new StringBuilder();
-        String line;
-        while ((line = in.readLine()) != null && !line.equals("EOF")) {
-            fileContent.append(line).append(System.lineSeparator());
-        }
-
+        // Receive file size
+        long fileSize = in.readLong();
         Path filePath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName);
-        Files.write(filePath, fileContent.toString().getBytes());
 
-        out.write("File uploaded successfully.\n");
-        out.flush();
+        // Receive file data
+        try (OutputStream fileOut = Files.newOutputStream(filePath)) {
+            byte[] buffer = new byte[4096];
+            long totalBytesRead = 0;
+            int bytesRead;
+
+            while (totalBytesRead < fileSize && (bytesRead = in.read(buffer, 0, (int)Math.min(buffer.length, fileSize - totalBytesRead))) != -1) {
+                fileOut.write(buffer, 0, bytesRead);
+                totalBytesRead += bytesRead;
+            }
+        }
+
+        out.writeUTF("File uploaded successfully.");
     }
 
-    private static void handleDownloadCommand(BufferedWriter out, String fileName, String currentUser) throws IOException {
+    private static void handleDownloadCommand(DataInputStream in, DataOutputStream out, String fileName, String currentUser) throws IOException {
         Path filePath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName);
         if (Files.exists(filePath)) {
-            out.write("File content:\n");
-            Files.lines(filePath).forEach(line -> {
-                try {
-                    out.write(line + "\n");
-                } catch (IOException e) {
-                    logger.log(Level.WARNING, "Error sending file content: ", e);
+            long fileSize = Files.size(filePath);
+            out.writeUTF("READY");
+            out.writeLong(fileSize);
+
+            try (InputStream fileIn = Files.newInputStream(filePath)) {
+                byte[] buffer = new byte[4096];
+                int bytesRead;
+                while ((bytesRead = fileIn.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
                 }
-            });
-            out.write("End of file.\n");
+            }
+            out.flush();
         } else {
-            out.write("Error: File not found.\n");
+            out.writeUTF("Error: File not found.");
         }
-        out.flush();
     }
 
-    private static void handleDeleteCommand(BufferedWriter out, String fileName, String currentUser) throws IOException {
+    private static void handleDeleteCommand(DataOutputStream out, String fileName, String currentUser) throws IOException {
         Path filePath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName);
         if (Files.exists(filePath)) {
             try {
                 Files.delete(filePath);
-                out.write("File deleted successfully.\n");
+                out.writeUTF("File deleted successfully.");
             } catch (IOException e) {
-                out.write("Error deleting file.\n");
+                out.writeUTF("Error deleting file.");
                 logger.log(Level.WARNING, "Error deleting file: " + fileName, e);
             }
         } else {
-            out.write("Error: File not found.\n");
+            out.writeUTF("Error: File not found.");
         }
-        out.flush();
     }
 }
