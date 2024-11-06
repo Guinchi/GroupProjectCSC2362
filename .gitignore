@@ -1,3 +1,7 @@
+# Ignore any .env or configuration files that contain sensitive data
+.env
+config.properties
+
 # Compiled class file
 *.class
 
