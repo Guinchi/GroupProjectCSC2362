@@ -137,6 +137,20 @@ public class SecureFileServer {
                             }
                         }
                         break;
+                    case "REGISTER":
+                        if (tokens.length < 3) {
+                            out.writeUTF("Error: Username or password not specified.");
+                        } else {
+                            String username = tokens[1];
+                            String password = tokens[2];
+                            boolean isRegistered = registerUser(username, password);
+                            if (isRegistered) {
+                                out.writeUTF("Registration successful.");
+                            } else {
+                                out.writeUTF("Error: Registration failed. User may already exist.");
+                            }
+                        }
+                        break;
                     case "EXIT":
                         out.writeUTF("Goodbye!");
                         clientSocket.close();
@@ -209,6 +223,7 @@ public class SecureFileServer {
                     out.writeUTF(file.getName());
                 }
             }
+            out.writeUTF("END_OF_LIST");
         } else {
             out.writeUTF("No files found in your folder.");
         }
@@ -270,4 +285,20 @@ public class SecureFileServer {
             out.writeUTF("Error: File not found.");
         }
     }
+
+    private static boolean registerUser(String username, String password) {
+        String query = "INSERT INTO users (username, password) VALUES (?, ?)";
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+    
+            stmt.setString(1, username);
+            stmt.setString(2, password);
+            int rowsAffected = stmt.executeUpdate();
+            return rowsAffected > 0;
+        } catch (SQLException e) {
+            logger.log(Level.SEVERE, "Database error during registration: ", e);
+        }
+        return false;
+    }
+    
 }
