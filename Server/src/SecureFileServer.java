@@ -286,19 +286,5 @@ public class SecureFileServer {
         }
     }
 
-    private static boolean registerUser(String username, String password) {
-        String query = "INSERT INTO users (username, password) VALUES (?, ?)";
-        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
-             PreparedStatement stmt = conn.prepareStatement(query)) {
-    
-            stmt.setString(1, username);
-            stmt.setString(2, password);
-            int rowsAffected = stmt.executeUpdate();
-            return rowsAffected > 0;
-        } catch (SQLException e) {
-            logger.log(Level.SEVERE, "Database error during registration: ", e);
-        }
-        return false;
-    }
     
 }

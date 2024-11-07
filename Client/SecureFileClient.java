@@ -96,7 +96,7 @@ public class SecureFileClient {
                 in.readUTF(); // Welcome message
                 in.readUTF(); // Commands message
 
-                // Send REGISTER command
+                // Send registration command
                 out.writeUTF("REGISTER " + username + " " + password);
                 String response = in.readUTF();
                 if (response.equals("Registration successful. You can now login.")) {
