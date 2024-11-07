@@ -286,5 +286,8 @@ public class SecureFileServer {
         }
     }
 
+    private static boolean registerUser(String username, String password) {
+        //Create register user method
+    }
     
 }
