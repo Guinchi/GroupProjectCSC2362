@@ -79,7 +79,7 @@ public class SecureFileServer {
             DataInputStream in = new DataInputStream(inStream);
             DataOutputStream out = new DataOutputStream(outStream);
         ) {
-            out.writeUTF("Welcome to the Secure Server!");
+            out.writeUTF("Welcome to the Server");
             out.writeUTF("Available commands: LOGIN <username> <password>, REGISTER <username> <password>, LIST, UPLOAD <filename>, DOWNLOAD <filename>, DELETE <filename>, EXIT");
 
             String clientMessage;
