@@ -19,8 +19,8 @@ public class SecureFileServer {
     private static final String FILE_STORAGE_PATH = "C:\\Users\\guinc\\Desktop\\stuff\\ServerStorage"; // Directory for storing user folders
 
     private static final String DB_URL = "jdbc:mysql://localhost:3306/secure_file_storage";
-    private static final String DB_USER = "root"; // Replace with actual database user
-    private static final String DB_PASSWORD = "dA241202"; // Replace with actual database password
+    private static final String DB_USER = "root";
+    private static final String DB_PASSWORD = "-------"; // replace with password 
 
     private static final Logger logger = Logger.getLogger(SecureFileServer.class.getName());
 
