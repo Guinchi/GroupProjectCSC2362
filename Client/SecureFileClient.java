@@ -117,7 +117,7 @@ public class SecureFileClient {
     }
 
     private boolean connectToServer() {
-        String serverAddress = "localhost"; // Replace with your server's IP if not local
+        String serverAddress = "localhost"; // Replace with server IP if not local
         int serverPort = 8443;
 
         try {
