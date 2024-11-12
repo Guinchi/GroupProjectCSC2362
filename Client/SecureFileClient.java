@@ -1,3 +1,5 @@
+// SecureFileClient.java
+
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.io.*;
@@ -96,7 +98,7 @@ public class SecureFileClient {
                 in.readUTF(); // Welcome message
                 in.readUTF(); // Commands message
 
-                // Send registration command
+                // Send REGISTER command
                 out.writeUTF("REGISTER " + username + " " + password);
                 String response = in.readUTF();
                 if (response.equals("Registration successful. You can now login.")) {
@@ -115,7 +117,7 @@ public class SecureFileClient {
     }
 
     private boolean connectToServer() {
-        String serverAddress = "localhost"; // Replace with IP
+        String serverAddress = "localhost"; // Replace with your server's IP if not local
         int serverPort = 8443;
 
         try {

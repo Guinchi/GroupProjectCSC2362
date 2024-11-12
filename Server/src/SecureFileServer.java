@@ -1,4 +1,5 @@
 // SecureFileServer.java
+
 import java.io.*;
 import java.nio.file.*;
 import java.security.KeyStore;
@@ -14,12 +15,12 @@ import javax.net.ssl.*;
 public class SecureFileServer {
     private static final int SERVER_PORT = 8443;
     private static final String KEYSTORE_PATH = "server.keystore";
-    private static final String KEYSTORE_PASSWORD = "Diego241202"; 
+    private static final String KEYSTORE_PASSWORD = "Diego241202";
     private static final String FILE_STORAGE_PATH = "C:\\Users\\guinc\\Desktop\\stuff\\ServerStorage"; // Directory for storing user folders
 
-    private static final String DB_URL = "jdbc:mysql://localhost:3306/your_database"; // Update with actual database URL
-    private static final String DB_USER = "dbUsername"; // Database user
-    private static final String DB_PASSWORD = "dbPassword"; // Database password
+    private static final String DB_URL = "jdbc:mysql://localhost:3306/secure_file_storage";
+    private static final String DB_USER = "root"; // Replace with actual database user
+    private static final String DB_PASSWORD = "dA241202"; // Replace with actual database password
 
     private static final Logger logger = Logger.getLogger(SecureFileServer.class.getName());
 
@@ -79,7 +80,7 @@ public class SecureFileServer {
             DataOutputStream out = new DataOutputStream(outStream);
         ) {
             out.writeUTF("Welcome to the Secure Server!");
-            out.writeUTF("Available commands: LOGIN <username> <password>, LIST, UPLOAD <filename>, DOWNLOAD <filename>, DELETE <filename>, EXIT");
+            out.writeUTF("Available commands: LOGIN <username> <password>, REGISTER <username> <password>, LIST, UPLOAD <filename>, DOWNLOAD <filename>, DELETE <filename>, EXIT");
 
             String clientMessage;
             while (true) {
@@ -102,6 +103,20 @@ public class SecureFileServer {
                                 out.writeUTF("Login successful.");
                             } else {
                                 out.writeUTF("Error: Invalid username or password.");
+                            }
+                        }
+                        break;
+                    case "REGISTER":
+                        if (tokens.length < 3) {
+                            out.writeUTF("Error: Username or password not specified.");
+                        } else {
+                            String username = tokens[1];
+                            String password = tokens[2];
+                            boolean isRegistered = registerUser(username, password);
+                            if (isRegistered) {
+                                out.writeUTF("Registration successful. You can now login.");
+                            } else {
+                                out.writeUTF("Error: Registration failed. User may already exist.");
                             }
                         }
                         break;
@@ -137,20 +152,6 @@ public class SecureFileServer {
                             }
                         }
                         break;
-                    case "REGISTER":
-                        if (tokens.length < 3) {
-                            out.writeUTF("Error: Username or password not specified.");
-                        } else {
-                            String username = tokens[1];
-                            String password = tokens[2];
-                            boolean isRegistered = registerUser(username, password);
-                            if (isRegistered) {
-                                out.writeUTF("Registration successful.");
-                            } else {
-                                out.writeUTF("Error: Registration failed. User may already exist.");
-                            }
-                        }
-                        break;
                     case "EXIT":
                         out.writeUTF("Goodbye!");
                         clientSocket.close();
@@ -176,18 +177,40 @@ public class SecureFileServer {
     }
 
     private static boolean validateUser(String username, String password) {
-        String query = "SELECT 1 FROM users WHERE username = ? AND password = ?";
+        String query = "SELECT password_hash FROM users WHERE username = ?";
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
              PreparedStatement stmt = conn.prepareStatement(query)) {
-                 
+
             stmt.setString(1, username);
-            stmt.setString(2, password);
 
             try (ResultSet rs = stmt.executeQuery()) {
-                return rs.next();
+                if (rs.next()) {
+                    String storedPassword = rs.getString("password_hash");
+                    return storedPassword.equals(password);
+                }
             }
         } catch (SQLException e) {
             logger.log(Level.SEVERE, "Database connection error: ", e);
+        }
+        return false;
+    }
+
+    private static boolean registerUser(String username, String password) {
+        String query = "INSERT INTO users (username, password_hash) VALUES (?, ?)";
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+
+            stmt.setString(1, username);
+            stmt.setString(2, password); // Store the password as-is
+
+            int rowsAffected = stmt.executeUpdate();
+            return rowsAffected > 0;
+        } catch (SQLException e) {
+            if (e.getSQLState().equals("23000")) { // Duplicate entry
+                logger.log(Level.INFO, "User already exists: " + username);
+            } else {
+                logger.log(Level.SEVERE, "Database error during registration: ", e);
+            }
         }
         return false;
     }
@@ -285,9 +308,4 @@ public class SecureFileServer {
             out.writeUTF("Error: File not found.");
         }
     }
-
-    private static boolean registerUser(String username, String password) {
-        //Create register user method
-    }
-    
 }
