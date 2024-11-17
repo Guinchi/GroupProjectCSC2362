@@ -10,6 +10,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
 import javax.net.ssl.*;
 
 public class SecureFileServer {
@@ -200,8 +202,16 @@ public class SecureFileServer {
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
              PreparedStatement stmt = conn.prepareStatement(query)) {
 
+
+            // generate symmetric key
+            KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+            keyGen.init(256);
+            SecretKey secretKey = keyGen.generateKey();
+            byte[] symmetricKey = secretKey.getEncoded();
+
             stmt.setString(1, username);
             stmt.setString(2, password); // Store the password as-is
+            stmt.setBytes(3, symmetricKey); // Store the symmetric key
 
             int rowsAffected = stmt.executeUpdate();
             return rowsAffected > 0;
@@ -211,6 +221,8 @@ public class SecureFileServer {
             } else {
                 logger.log(Level.SEVERE, "Database error during registration: ", e);
             }
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "Error generating symmetric key: ", e);
         }
         return false;
     }
