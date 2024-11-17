@@ -10,13 +10,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.crypto.Cipher;
-import javax.crypto.CipherInputStream;
-import javax.crypto.CipherOutputStream;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
-import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 import javax.net.ssl.*;
 
 public class SecureFileServer {
@@ -203,7 +198,7 @@ public class SecureFileServer {
     }
 
     private static boolean registerUser(String username, String password) {
-        String query = "INSERT INTO users (username, password_hash, symmetric_key) VALUES (?, ?, ?)";
+        String query = "INSERT INTO users (username, password_hash) VALUES (?, ?)";
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
              PreparedStatement stmt = conn.prepareStatement(query)) {
 
@@ -260,12 +255,7 @@ public class SecureFileServer {
             out.writeUTF("Your files:");
             for (File file : listOfFiles) {
                 if (file.isFile()) {
-                    String filename = file.getName();
-
-                    // Exclude IV files 
-                    if (!filename.endsWith(".iv")) {
-                        out.writeUTF(filename);
-                    }
+                    out.writeUTF(file.getName());
                 }
             }
             out.writeUTF("END_OF_LIST");
@@ -276,110 +266,45 @@ public class SecureFileServer {
 
     private static void handleUploadCommand(DataInputStream in, DataOutputStream out, String fileName, String currentUser) throws IOException {
         out.writeUTF("Ready to receive file size.");
-    
-        // Retrieve symmetric key for the user
-        byte[] symmetricKey;
-        try {
-            symmetricKey = getSymmetricKey(currentUser);
-        } catch (SQLException e) {
-            out.writeUTF("Error: User not found while retrieving symmetric key.");
-            return;
-        }
-    
-        // Receive original file size
-        long originalFileSize = in.readLong();
+
+        // Receive file size
+        long fileSize = in.readLong();
         Path filePath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName);
-    
-        // Initialize cipher for encryption
-        Cipher cipher;
-        byte[] iv;
-        try {
-            cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-            SecretKeySpec keySpec = new SecretKeySpec(symmetricKey, "AES");
-            cipher.init(Cipher.ENCRYPT_MODE, keySpec);
-            iv = cipher.getIV(); // Get IV
-        } catch (Exception e) {
-            out.writeUTF("Error initializing encryption.");
-            return;
-        }
-    
-        // **Store the IV in a separate file or prepend it to the encrypted file**
-        Path ivPath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName + ".iv");
-        Files.write(ivPath, iv);
-    
-        // Receive file data and encrypt it
-        try (CipherOutputStream cipherOut = new CipherOutputStream(Files.newOutputStream(filePath), cipher)) {
+
+        // Receive file data
+        try (OutputStream fileOut = Files.newOutputStream(filePath)) {
             byte[] buffer = new byte[4096];
             long totalBytesRead = 0;
             int bytesRead;
-    
-            while (totalBytesRead < originalFileSize && (bytesRead = in.read(buffer)) != -1) {
-                cipherOut.write(buffer, 0, bytesRead);
+
+            while (totalBytesRead < fileSize && (bytesRead = in.read(buffer, 0, (int)Math.min(buffer.length, fileSize - totalBytesRead))) != -1) {
+                fileOut.write(buffer, 0, bytesRead);
                 totalBytesRead += bytesRead;
             }
-        } catch (Exception e) {
-            out.writeUTF("Error: File upload failed during encryption.");
-            return;
         }
-    
-        out.writeUTF("File uploaded and encrypted successfully.");
-    }
-    
 
+        out.writeUTF("File uploaded successfully.");
+    }
 
     private static void handleDownloadCommand(DataInputStream in, DataOutputStream out, String fileName, String currentUser) throws IOException {
         Path filePath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName);
-        Path ivPath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName + ".iv");
-    
-        if (Files.exists(filePath) && Files.exists(ivPath)) {
-            // Retrieve symmetric key for the user
-            byte[] symmetricKey;
-            try {
-                symmetricKey = getSymmetricKey(currentUser);
-            } catch (SQLException e) {
-                out.writeUTF("Error retrieving symmetric key.");
-                return;
-            }
-    
-            // Read the IV from the stored file
-            byte[] iv = Files.readAllBytes(ivPath);
-    
-            // Initialize cipher for decryption
-            Cipher cipher;
-            try {
-                cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-                SecretKeySpec keySpec = new SecretKeySpec(symmetricKey, "AES");
-                cipher.init(Cipher.DECRYPT_MODE, keySpec, new IvParameterSpec(iv));
-            } catch (Exception e) {
-                out.writeUTF("Error initializing decryption.");
-                return;
-            }
-    
-    
-            // Send the decrypted file size
-            long encryptedFileSize = Files.size(filePath);
+        if (Files.exists(filePath)) {
+            long fileSize = Files.size(filePath);
             out.writeUTF("READY");
-            out.writeLong(encryptedFileSize);
-    
-            // Read and decrypt file data
-            try (CipherInputStream cipherIn = new CipherInputStream(Files.newInputStream(filePath), cipher)) {
+            out.writeLong(fileSize);
+
+            try (InputStream fileIn = Files.newInputStream(filePath)) {
                 byte[] buffer = new byte[4096];
                 int bytesRead;
-                while ((bytesRead = cipherIn.read(buffer)) != -1) {
+                while ((bytesRead = fileIn.read(buffer)) != -1) {
                     out.write(buffer, 0, bytesRead);
                 }
-            } catch (Exception e) {
-                out.writeUTF("Error decrypting file.");
-                return;
             }
-    
             out.flush();
         } else {
-            out.writeUTF("Error: File or IV not found.");
+            out.writeUTF("Error: File not found.");
         }
     }
-    
-
 
     private static void handleDeleteCommand(DataOutputStream out, String fileName, String currentUser) throws IOException {
         Path filePath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName);
@@ -395,22 +320,4 @@ public class SecureFileServer {
             out.writeUTF("Error: File not found.");
         }
     }
-
-
-    private static byte[] getSymmetricKey(String username) throws SQLException {
-        String query = "SELECT symmetric_key FROM users WHERE username = ?";
-        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
-             PreparedStatement stmt = conn.prepareStatement(query)) {
-            stmt.setString(1, username);
-            try (ResultSet rs = stmt.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getBytes("symmetric_key");
-                } else {
-                    throw new SQLException("User not found: " + username);
-                }
-            }
-        }
-    }
-
-
 }
