@@ -22,7 +22,7 @@ public class SecureFileServer {
 
     private static final String DB_URL = "jdbc:mysql://localhost:3306/secure_file_storage";
     private static final String DB_USER = "root";
-    private static final String DB_PASSWORD = "-------"; // replace with password 
+    private static final String DB_PASSWORD = "--------"; // replace with password 
 
     private static final Logger logger = Logger.getLogger(SecureFileServer.class.getName());
 
@@ -211,7 +211,7 @@ public class SecureFileServer {
 
             stmt.setString(1, username);
             stmt.setString(2, password); // Store the password as-is
-            stmt.setBytes(3, symmetricKey); // Store the symmetric key
+            // stmt.setBytes(3, symmetricKey); // Store the symmetric key
 
             int rowsAffected = stmt.executeUpdate();
             return rowsAffected > 0;
