@@ -13,6 +13,7 @@ import java.util.logging.Logger;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.net.ssl.*;
+import org.mindrot.jbcrypt.BCrypt;
 
 public class SecureFileServer {
     private static final int SERVER_PORT = 8443;
@@ -187,8 +188,8 @@ public class SecureFileServer {
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
-                    String storedPassword = rs.getString("password_hash");
-                    return storedPassword.equals(password);
+                    String storedPasswordHash = rs.getString("password_hash");
+                    return BCrypt.checkpw(password, storedPasswordHash);
                 }
             }
         } catch (SQLException e) {
@@ -198,35 +199,39 @@ public class SecureFileServer {
     }
 
     private static boolean registerUser(String username, String password) {
-        String query = "INSERT INTO users (username, password_hash) VALUES (?, ?)";
+        String query = "INSERT INTO users (username, password_hash, symmetric_key) VALUES (?, ?, ?)";
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
              PreparedStatement stmt = conn.prepareStatement(query)) {
-
-
-            // generate symmetric key
+    
+            // Hash the password using bcrypt
+            String hashedPassword = BCrypt.hashpw(password, BCrypt.gensalt());
+    
+            // Generate the symmetric key (AES 256-bit)
             KeyGenerator keyGen = KeyGenerator.getInstance("AES");
             keyGen.init(256);
             SecretKey secretKey = keyGen.generateKey();
-            byte[] symmetricKey = secretKey.getEncoded();
-
+            byte[] symmetricKey = secretKey.getEncoded(); // Convert the SecretKey to byte array
+    
+            // Set the username, hashed password, and symmetric key in the query
             stmt.setString(1, username);
-            stmt.setString(2, password); // Store the password as-is
-            stmt.setBytes(3, symmetricKey); // Store the symmetric key
-
+            stmt.setString(2, hashedPassword); // Store the hashed password
+            stmt.setBytes(3, symmetricKey); // Store the symmetric key (as bytes)
+    
+            // Execute the insert query
             int rowsAffected = stmt.executeUpdate();
             return rowsAffected > 0;
         } catch (SQLException e) {
-            if (e.getSQLState().equals("23000")) { // Duplicate entry
+            if (e.getSQLState().equals("23000")) { // Duplicate entry (user already exists)
                 logger.log(Level.INFO, "User already exists: " + username);
             } else {
                 logger.log(Level.SEVERE, "Database error during registration: ", e);
             }
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Error generating symmetric key: ", e);
+            logger.log(Level.SEVERE, "Error generating symmetric key or hashing password: ", e);
         }
         return false;
     }
-
+    
     private static void createUserFolder(String username) {
         Path userFolderPath = Paths.get(FILE_STORAGE_PATH, username);
         if (!Files.exists(userFolderPath)) {
