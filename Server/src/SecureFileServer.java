@@ -8,20 +8,27 @@ import javax.crypto.*;
 import javax.crypto.spec.SecretKeySpec;
 import javax.net.ssl.*;
 import org.mindrot.jbcrypt.BCrypt;
+import java.util.HashMap;
 
 public class SecureFileServer {
     private static final int SERVER_PORT = 8443;
     private static final String KEYSTORE_PATH = "server.keystore";
     private static final String KEYSTORE_PASSWORD = "Diego241202";
-    private static final String FILE_STORAGE_PATH = "C:\\Users\\guinc\\Desktop\\stuff\\ServerStorage"; // Directory for storing user folders
+    private static final String FILE_STORAGE_PATH = "/Users/guinchi/Desktop/github/Project/ServerStorage"; // Directory for storing user folders
 
     private static final String DB_URL = "jdbc:mysql://localhost:3306/secure_file_storage";
     private static final String DB_USER = "root";
-    private static final String DB_PASSWORD = "dA241202"; // replace with your password
+    private static final String DB_PASSWORD = "--------"; // replace with your password
 
     private static final Logger logger = Logger.getLogger(SecureFileServer.class.getName());
 
     private static final long MAX_FILE_SIZE = 250L * 1024 * 1024; // 250 MB
+
+    private static final int MAX_LOGIN_ATTEMPTS = 3;
+    private static final long LOGIN_TIMEOUT = 1 * 60 * 1000; // 1 minute
+
+    private static final HashMap<String, Integer> loginAttempts = new HashMap<>();
+    private static final HashMap<String, Long> loginTimers = new HashMap<>();
 
     public static void main(String[] args) {
         SSLServerSocket serverSocket = null;
@@ -94,24 +101,56 @@ public class SecureFileServer {
 
                 switch (command) {
                     case "LOGIN":
-                        if (tokens.length < 3) {
-                            out.writeUTF("Error: Username or password not specified.");
-                            out.flush();
-                        } else {
-                            String username = tokens[1];
-                            String password = tokens[2];
-                            boolean isValid = validateUser(username, password);
-                            if (isValid) {
-                                currentUser = username;
-                                createUserFolder(currentUser);
-                                out.writeUTF("Login successful.");
-                                out.flush();
-                            } else {
-                                out.writeUTF("Error: Invalid username or password.");
-                                out.flush();
+                    if (tokens.length < 3) {
+                        out.writeUTF("Error: Username or password not specified.");
+                        out.flush();
+                    } else {
+                        String username = tokens[1];
+                        String password = tokens[2];
+
+                        // Check if the user has exceeded the login attempts limit or if the timer has expired
+                        if (loginAttempts.containsKey(username)) {
+                            int attempts = loginAttempts.get(username);
+                            long timestamp = loginTimers.get(username);
+                
+                            // Check if more than 1 minute has passed since the first attempt
+                            if (System.currentTimeMillis() - timestamp > LOGIN_TIMEOUT) {
+                                // Reset the login attempts counter and timer if 1 minute has passed
+                                loginAttempts.put(username, 0);
+                                loginTimers.put(username, System.currentTimeMillis());
                             }
+                
+                            // If MAX_LOGIN_ATTEMPTS attempts have been made, deny login
+                            if (attempts >= MAX_LOGIN_ATTEMPTS) {
+                                out.writeUTF("Error: Too many login attempts. Please try again later.");
+                                out.flush();
+                                return;
+                            }
+                        } else {
+                            // Initialize the login attempts and timestamp if the user has not tried logging in yet
+                            loginTimers.put(username, System.currentTimeMillis());
+                            loginAttempts.put(username, 0); // Start with 0 attempts
                         }
-                        break;
+                
+                        boolean isValid = validateUser(username, password);
+                        if (isValid) {
+                            currentUser = username;
+                            createUserFolder(currentUser);
+                            out.writeUTF("Login successful.");
+                            out.flush();
+                
+                            // Reset login attempts on successful login
+                            loginAttempts.remove(username);
+                            loginTimers.remove(username);
+                        } else {
+                            // Increment login attempts count
+                            loginAttempts.put(username, loginAttempts.getOrDefault(username, 0) + 1);
+                
+                            out.writeUTF("Error: Invalid username or password.");
+                            out.flush();
+                        }
+                    }
+                    break;
                     case "REGISTER":
                         if (tokens.length < 3) {
                             out.writeUTF("Error: Username or password not specified.");
