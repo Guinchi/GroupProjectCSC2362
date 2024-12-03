@@ -1,18 +1,10 @@
 import java.io.*;
 import java.nio.file.*;
 import java.security.KeyStore;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.sql.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.crypto.Cipher;
-import javax.crypto.CipherInputStream;
-import javax.crypto.CipherOutputStream;
-import javax.crypto.KeyGenerator;
-import javax.crypto.SecretKey;
+import javax.crypto.*;
 import javax.crypto.spec.SecretKeySpec;
 import javax.net.ssl.*;
 import org.mindrot.jbcrypt.BCrypt;
@@ -34,7 +26,7 @@ public class SecureFileServer {
     public static void main(String[] args) {
         SSLServerSocket serverSocket = null;
         try {
-            // **Fix 4: Load JDBC driver**
+            // Load JDBC driver
             Class.forName("com.mysql.cj.jdbc.Driver");
 
             // Load SSL context with the server's keystore
@@ -90,8 +82,8 @@ public class SecureFileServer {
             DataOutputStream out = new DataOutputStream(outStream);
         ) {
             out.writeUTF("Welcome to the Server");
-            out.writeUTF("Available commands: LOGIN <username> <password>, REGISTER <username> <password>, LIST, UPLOAD <filename>, DOWNLOAD <filename>, DELETE <filename>, EXIT");
-            out.flush(); // **Fix 3: Ensure messages are sent**
+            out.writeUTF("Available commands: LOGIN <username> <password>, REGISTER <username> <password>, LIST [path], UPLOAD <filename>, DOWNLOAD <filepath>, DELETE <filename>, EXIT");
+            out.flush();
 
             String clientMessage;
             while (true) {
@@ -132,14 +124,14 @@ public class SecureFileServer {
                                 out.writeUTF("Registration successful. You can now login.");
                                 out.flush();
                             } else {
-                                out.writeUTF("Error: Registration failed. User may already exist.");
+                                out.writeUTF("Error: Registration failed. User may already exist or username is reserved.");
                                 out.flush();
                             }
                         }
                         break;
                     case "LIST":
                         if (isLoggedIn(currentUser, out)) {
-                            handleListCommand(out, currentUser);
+                            handleListCommand(out, currentUser, tokens);
                         }
                         break;
                     case "UPLOAD":
@@ -148,14 +140,19 @@ public class SecureFileServer {
                                 out.writeUTF("Error: Filename not specified.");
                                 out.flush();
                             } else {
-                                handleUploadCommand(in, out, tokens[1], currentUser);
+                                if (currentUser.equals("admin")) {
+                                    out.writeUTF("Error: Admin cannot upload files.");
+                                    out.flush();
+                                } else {
+                                    handleUploadCommand(in, out, tokens[1], currentUser);
+                                }
                             }
                         }
                         break;
                     case "DOWNLOAD":
                         if (isLoggedIn(currentUser, out)) {
                             if (tokens.length < 2) {
-                                out.writeUTF("Error: Filename not specified.");
+                                out.writeUTF("Error: Filepath not specified.");
                                 out.flush();
                             } else {
                                 handleDownloadCommand(in, out, tokens[1], currentUser);
@@ -168,7 +165,12 @@ public class SecureFileServer {
                                 out.writeUTF("Error: Filename not specified.");
                                 out.flush();
                             } else {
-                                handleDeleteCommand(out, tokens[1], currentUser);
+                                if (currentUser.equals("admin")) {
+                                    out.writeUTF("Error: Admin cannot delete files.");
+                                    out.flush();
+                                } else {
+                                    handleDeleteCommand(out, tokens[1], currentUser);
+                                }
                             }
                         }
                         break;
@@ -199,6 +201,11 @@ public class SecureFileServer {
     }
 
     private static boolean validateUser(String username, String password) {
+        if (username.equals("admin")) {
+            // For 'admin', compare the password directly to 'admin'
+            return password.equals("admin");
+        }
+
         String query = "SELECT password_hash FROM users WHERE username = ?";
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
              PreparedStatement stmt = conn.prepareStatement(query)) {
@@ -218,24 +225,30 @@ public class SecureFileServer {
     }
 
     private static boolean registerUser(String username, String password) {
+        // Prevent registration with username 'admin'
+        if (username.equalsIgnoreCase("admin")) {
+            logger.log(Level.INFO, "Attempt to register with reserved username: " + username);
+            return false;
+        }
+
         String query = "INSERT INTO users (username, password_hash, symmetric_key) VALUES (?, ?, ?)";
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
              PreparedStatement stmt = conn.prepareStatement(query)) {
-   
+
             // Hash the password using bcrypt
             String hashedPassword = BCrypt.hashpw(password, BCrypt.gensalt());
-    
+
             // Generate the symmetric key (AES 256-bit)
             KeyGenerator keyGen = KeyGenerator.getInstance("AES");
             keyGen.init(256);
             SecretKey secretKey = keyGen.generateKey();
             byte[] symmetricKey = secretKey.getEncoded(); // Convert the SecretKey to byte array
-    
+
             // Set the username, hashed password, and symmetric key in the query
             stmt.setString(1, username);
             stmt.setString(2, hashedPassword); // Store the hashed password
             stmt.setBytes(3, symmetricKey); // Store the symmetric key (as bytes)
-    
+
             // Execute the insert query
             int rowsAffected = stmt.executeUpdate();
             return rowsAffected > 0;
@@ -250,7 +263,7 @@ public class SecureFileServer {
         }
         return false;
     }
-    
+
     private static void createUserFolder(String username) {
         Path userFolderPath = Paths.get(FILE_STORAGE_PATH, username);
         if (!Files.exists(userFolderPath)) {
@@ -272,8 +285,32 @@ public class SecureFileServer {
         return true;
     }
 
-    private static void handleListCommand(DataOutputStream out, String currentUser) throws IOException {
-        File userFolder = new File(FILE_STORAGE_PATH, currentUser);
+    private static void handleListCommand(DataOutputStream out, String currentUser, String[] tokens) throws IOException {
+        File userFolder;
+        String path = "";
+        if (tokens.length > 1 && currentUser.equals("admin")) {
+            path = tokens[1]; // Get the path parameter
+        }
+        if (currentUser.equals("admin")) {
+            userFolder = new File(FILE_STORAGE_PATH, path);
+        } else {
+            userFolder = new File(FILE_STORAGE_PATH, currentUser);
+        }
+
+        // Normalize the path to prevent directory traversal attacks
+        Path normalizedPath = userFolder.toPath().normalize();
+        if (!normalizedPath.startsWith(Paths.get(FILE_STORAGE_PATH))) {
+            out.writeUTF("Error: Access denied.");
+            out.flush();
+            return;
+        }
+
+        if (!userFolder.exists() || !userFolder.isDirectory()) {
+            out.writeUTF("Error: Directory not found.");
+            out.flush();
+            return;
+        }
+
         File[] listOfFiles = userFolder.listFiles();
 
         if (listOfFiles != null && listOfFiles.length > 0) {
@@ -281,18 +318,20 @@ public class SecureFileServer {
             for (File file : listOfFiles) {
                 if (file.isFile()) {
                     out.writeUTF(file.getName());
+                } else if (file.isDirectory() && currentUser.equals("admin")) {
+                    out.writeUTF("[DIR] " + file.getName());
                 }
             }
             out.writeUTF("END_OF_LIST");
         } else {
             out.writeUTF("No files found in your folder.");
         }
-        out.flush(); // **Fix 3: Flush output stream**
+        out.flush();
     }
 
     private static void handleUploadCommand(DataInputStream in, DataOutputStream out, String fileName, String currentUser) throws IOException {
         out.writeUTF("Ready to receive file size.");
-        out.flush(); // **Fix 3: Flush output stream**
+        out.flush();
 
         // Receive file size
         long fileSize = in.readLong();
@@ -305,6 +344,13 @@ public class SecureFileServer {
         }
 
         Path filePath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName);
+
+        // Check if file already exists
+        if (Files.exists(filePath)) {
+            out.writeUTF("Error: File already exists. Use a different name or delete the existing file.");
+            out.flush();
+            return;
+        }
 
         // Retrieve symmetric key for the user
         byte[] symmetricKey;
@@ -330,7 +376,7 @@ public class SecureFileServer {
 
         // Send acknowledgment to client to proceed
         out.writeUTF("Proceed with file upload.");
-        out.flush(); // **Fix 3: Flush output stream**
+        out.flush();
 
         // Receive file data and encrypt it
         try (CipherOutputStream cipherOut = new CipherOutputStream(Files.newOutputStream(filePath), cipher)) {
@@ -349,63 +395,99 @@ public class SecureFileServer {
         }
 
         out.writeUTF("File uploaded and encrypted successfully.");
-        out.flush(); // **Fix 3: Flush output stream**
+        out.flush();
     }
 
     private static void handleDownloadCommand(DataInputStream in, DataOutputStream out, String fileName, String currentUser) throws IOException {
-        Path filePath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName);
+        Path filePath;
+        if (currentUser.equals("admin")) {
+            // Admin can access any path under FILE_STORAGE_PATH
+            filePath = Paths.get(FILE_STORAGE_PATH, fileName);
+        } else {
+            filePath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName);
+        }
+
+        // Normalize the path to prevent directory traversal attacks
+        Path normalizedPath = filePath.normalize();
+        if (!normalizedPath.startsWith(Paths.get(FILE_STORAGE_PATH))) {
+            out.writeUTF("Error: Access denied.");
+            out.flush();
+            return;
+        }
+
         if (Files.exists(filePath)) {
-            // Retrieve symmetric key for the user
-            byte[] symmetricKey;
-            try {
-                symmetricKey = getSymmetricKey(currentUser);
-            } catch (SQLException e) {
-                out.writeUTF("Error retrieving symmetric key.");
+            if (currentUser.equals("admin")) {
+                // Admin downloads the encrypted file as is
+                long fileSize = Files.size(filePath);
+                out.writeUTF("READY");
+                out.writeLong(fileSize);
                 out.flush();
-                return;
-            }
 
-            // Initialize cipher for decryption
-            Cipher cipher;
-            try {
-                cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-                SecretKeySpec keySpec = new SecretKeySpec(symmetricKey, "AES");
-                cipher.init(Cipher.DECRYPT_MODE, keySpec);
-            } catch (Exception e) {
-                out.writeUTF("Error initializing decryption.");
-                out.flush();
-                return;
-            }
-
-            // **Fix 1 & 2: Read decrypted data into memory to get its size**
-            try (CipherInputStream cipherIn = new CipherInputStream(Files.newInputStream(filePath), cipher);
-                 ByteArrayOutputStream byteOut = new ByteArrayOutputStream()) {
-
-                byte[] buffer = new byte[4096];
-                int bytesRead;
-                while ((bytesRead = cipherIn.read(buffer)) != -1) {
-                    byteOut.write(buffer, 0, bytesRead);
+                try (InputStream fileIn = Files.newInputStream(filePath)) {
+                    byte[] buffer = new byte[4096];
+                    int bytesRead;
+                    while ((bytesRead = fileIn.read(buffer)) != -1) {
+                        out.write(buffer, 0, bytesRead);
+                    }
+                    out.flush();
+                } catch (Exception e) {
+                    out.writeUTF("Error reading file.");
+                    out.flush();
+                    logger.log(Level.SEVERE, "Error reading file for admin download: " + fileName, e);
+                    return;
+                }
+            } else {
+                // Retrieve symmetric key for the user
+                byte[] symmetricKey;
+                try {
+                    symmetricKey = getSymmetricKey(currentUser);
+                } catch (SQLException e) {
+                    out.writeUTF("Error retrieving symmetric key.");
+                    out.flush();
+                    return;
                 }
 
-                // Get the decrypted data and its size
-                byte[] decryptedData = byteOut.toByteArray();
-                long decryptedFileSize = decryptedData.length;
+                // Initialize cipher for decryption
+                Cipher cipher;
+                try {
+                    cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+                    SecretKeySpec keySpec = new SecretKeySpec(symmetricKey, "AES");
+                    cipher.init(Cipher.DECRYPT_MODE, keySpec);
+                } catch (Exception e) {
+                    out.writeUTF("Error initializing decryption.");
+                    out.flush();
+                    return;
+                }
 
-                // Send "READY" and the size of the decrypted file
-                out.writeUTF("READY");
-                out.writeLong(decryptedFileSize);
-                out.flush(); // **Fix 3: Flush output stream**
+                // Read decrypted data into memory to get its size
+                try (CipherInputStream cipherIn = new CipherInputStream(Files.newInputStream(filePath), cipher);
+                     ByteArrayOutputStream byteOut = new ByteArrayOutputStream()) {
 
-                // Send the decrypted data
-                out.write(decryptedData);
-                out.flush(); // **Fix 3: Flush output stream**
+                    byte[] buffer = new byte[4096];
+                    int bytesRead;
+                    while ((bytesRead = cipherIn.read(buffer)) != -1) {
+                        byteOut.write(buffer, 0, bytesRead);
+                    }
 
-            } catch (Exception e) {
-                out.writeUTF("Error decrypting file.");
-                out.flush();
-                return;
+                    // Get the decrypted data and its size
+                    byte[] decryptedData = byteOut.toByteArray();
+                    long decryptedFileSize = decryptedData.length;
+
+                    // Send "READY" and the size of the decrypted file
+                    out.writeUTF("READY");
+                    out.writeLong(decryptedFileSize);
+                    out.flush();
+
+                    // Send the decrypted data
+                    out.write(decryptedData);
+                    out.flush();
+
+                } catch (Exception e) {
+                    out.writeUTF("Error decrypting file.");
+                    out.flush();
+                    return;
+                }
             }
-
         } else {
             out.writeUTF("Error: File not found.");
             out.flush();
@@ -413,7 +495,14 @@ public class SecureFileServer {
     }
 
     private static void handleDeleteCommand(DataOutputStream out, String fileName, String currentUser) throws IOException {
+        if (currentUser.equals("admin")) {
+            out.writeUTF("Error: Admin cannot delete files.");
+            out.flush();
+            return;
+        }
+
         Path filePath = Paths.get(FILE_STORAGE_PATH, currentUser, fileName);
+
         if (Files.exists(filePath)) {
             try {
                 Files.delete(filePath);
@@ -425,7 +514,7 @@ public class SecureFileServer {
         } else {
             out.writeUTF("Error: File not found.");
         }
-        out.flush(); // **Fix 3: Flush output stream**
+        out.flush();
     }
 
     private static byte[] getSymmetricKey(String username) throws SQLException {

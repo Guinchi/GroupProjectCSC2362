@@ -18,6 +18,7 @@ public class SecureFileClient {
     private DataOutputStream out;
 
     private String currentUser;
+    private String currentPath = ""; // Keep track of the current directory path for admin
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> new SecureFileClient().createAndShowGUI());
@@ -116,11 +117,11 @@ public class SecureFileClient {
     }
 
     private boolean connectToServer() {
-        String serverAddress = "localhost"; 
+        String serverAddress = "localhost";
         int serverPort = 8443;
 
         try {
-            // load server keystore
+            // Load server keystore
             KeyStore trustStore = KeyStore.getInstance("JKS");
             try (InputStream trustStoreStream = new FileInputStream("server.keystore")) {
                 trustStore.load(trustStoreStream, "Diego241202".toCharArray()); // Use your keystore password
@@ -169,12 +170,18 @@ public class SecureFileClient {
         // Buttons
         JPanel buttonPanel = new JPanel();
         JButton refreshButton = new JButton("Refresh");
+        JButton enterDirButton = new JButton("Enter Directory");
+        JButton backButton = new JButton("Back");
         JButton uploadButton = new JButton("Upload");
         JButton downloadButton = new JButton("Download");
         JButton deleteButton = new JButton("Delete");
         JButton logoutButton = new JButton("Logout");
 
         buttonPanel.add(refreshButton);
+        if (currentUser.equals("admin")) {
+            buttonPanel.add(enterDirButton);
+            buttonPanel.add(backButton);
+        }
         buttonPanel.add(uploadButton);
         buttonPanel.add(downloadButton);
         buttonPanel.add(deleteButton);
@@ -201,6 +208,17 @@ public class SecureFileClient {
             createAndShowGUI(); // Go back to login screen
         });
 
+        if (currentUser.equals("admin")) {
+            enterDirButton.addActionListener(e -> enterDirectory(fileList.getSelectedValue(), fileListModel));
+            backButton.addActionListener(e -> goBackDirectory(fileListModel));
+        }
+
+        // Disable Upload and Delete buttons for admin
+        if (currentUser.equals("admin")) {
+            uploadButton.setEnabled(false);
+            deleteButton.setEnabled(false);
+        }
+
         // Initial refresh
         refreshFileList(fileListModel);
     }
@@ -208,7 +226,11 @@ public class SecureFileClient {
     private void refreshFileList(DefaultListModel<String> fileListModel) {
         new Thread(() -> {
             try {
-                out.writeUTF("LIST");
+                String command = "LIST";
+                if (currentUser.equals("admin") && !currentPath.isEmpty()) {
+                    command += " " + currentPath;
+                }
+                out.writeUTF(command);
                 out.flush();
                 String response = in.readUTF();
                 SwingUtilities.invokeLater(() -> {
@@ -233,6 +255,37 @@ public class SecureFileClient {
                 JOptionPane.showMessageDialog(null, "Error communicating with server.", "Error", JOptionPane.ERROR_MESSAGE);
             }
         }).start();
+    }
+
+    private void enterDirectory(String selectedValue, DefaultListModel<String> fileListModel) {
+        if (selectedValue == null) {
+            JOptionPane.showMessageDialog(null, "Please select a directory to enter.", "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        if (!selectedValue.startsWith("[DIR] ")) {
+            JOptionPane.showMessageDialog(null, "Selected item is not a directory.", "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        String dirName = selectedValue.substring(6); // Remove "[DIR] " prefix
+        if (currentPath.isEmpty()) {
+            currentPath = dirName;
+        } else {
+            currentPath = currentPath + File.separator + dirName;
+        }
+        refreshFileList(fileListModel);
+    }
+
+    private void goBackDirectory(DefaultListModel<String> fileListModel) {
+        if (currentPath.isEmpty()) {
+            JOptionPane.showMessageDialog(null, "You are at the root directory.", "Information", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        File current = new File(currentPath);
+        currentPath = current.getParent();
+        if (currentPath == null) {
+            currentPath = "";
+        }
+        refreshFileList(fileListModel);
     }
 
     private void handleUpload() {
@@ -277,6 +330,8 @@ public class SecureFileClient {
 
                         String uploadResponse = in.readUTF();
                         JOptionPane.showMessageDialog(null, uploadResponse, "Upload", JOptionPane.INFORMATION_MESSAGE);
+                        // Refresh file list after upload
+                        refreshFileList(new DefaultListModel<>());
                     } else {
                         JOptionPane.showMessageDialog(null, response, "Error", JOptionPane.ERROR_MESSAGE);
                     }
@@ -293,9 +348,17 @@ public class SecureFileClient {
             JOptionPane.showMessageDialog(null, "Please select a file to download.", "Error", JOptionPane.ERROR_MESSAGE);
             return;
         }
+        if (fileName.startsWith("[DIR] ")) {
+            JOptionPane.showMessageDialog(null, "Cannot download a directory.", "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
         new Thread(() -> {
             try {
-                out.writeUTF("DOWNLOAD " + fileName);
+                String filePath = fileName;
+                if (currentUser.equals("admin") && !currentPath.isEmpty()) {
+                    filePath = currentPath + File.separator + fileName;
+                }
+                out.writeUTF("DOWNLOAD " + filePath);
                 out.flush();
                 String response = in.readUTF();
                 if (response.equals("READY")) {
@@ -317,7 +380,12 @@ public class SecureFileClient {
                                 totalBytesRead += bytesRead;
                             }
                         }
-                        JOptionPane.showMessageDialog(null, "File downloaded successfully.", "Download", JOptionPane.INFORMATION_MESSAGE);
+
+                        if (currentUser.equals("admin")) {
+                            JOptionPane.showMessageDialog(null, "File downloaded successfully. Note: The file is encrypted.", "Download", JOptionPane.INFORMATION_MESSAGE);
+                        } else {
+                            JOptionPane.showMessageDialog(null, "File downloaded successfully.", "Download", JOptionPane.INFORMATION_MESSAGE);
+                        }
                     }
                 } else {
                     JOptionPane.showMessageDialog(null, response, "Error", JOptionPane.ERROR_MESSAGE);
